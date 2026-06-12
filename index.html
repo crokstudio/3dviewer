@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Static 3D shipping container viewer with switchable construction and maintenance layers."
+    />
+    <title>Container Layer Viewer</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="viewer-region" aria-label="3D container viewer">
+        <canvas id="scene-canvas"></canvas>
+        <div class="viewport-hud" aria-live="polite">
+          <div>
+            <span class="hud-label">Mode</span>
+            <strong id="active-preset-label">All Layers</strong>
+          </div>
+          <div>
+            <span class="hud-label">Visible</span>
+            <strong id="visible-count">0/0</strong>
+          </div>
+        </div>
+        <div class="object-labels" id="object-labels" aria-hidden="true"></div>
+      </section>
+
+      <aside class="control-panel" aria-label="Layer controls">
+        <header class="panel-header">
+          <p class="eyebrow">3D Project Review</p>
+          <h1>Container Layer Viewer</h1>
+        </header>
+
+        <section class="control-block" aria-label="View presets">
+          <div class="section-heading">
+            <h2>Presets</h2>
+          </div>
+          <div class="preset-grid" id="preset-grid"></div>
+        </section>
+
+        <section class="control-block" aria-label="View tools">
+          <div class="section-heading">
+            <h2>View</h2>
+          </div>
+          <div class="tool-grid">
+            <button class="icon-button" id="home-view" type="button" aria-label="Reset camera" title="Reset camera">
+              <span aria-hidden="true">⌂</span>
+            </button>
+            <button class="icon-button" id="focus-view" type="button" aria-label="Focus visible layers" title="Focus visible layers">
+              <span aria-hidden="true">◎</span>
+            </button>
+            <label class="toggle-row" for="xray-shell">
+              <span>X-ray shell</span>
+              <input id="xray-shell" type="checkbox" />
+            </label>
+          </div>
+          <label class="range-control" for="explode-range">
+            <span>Explode</span>
+            <input id="explode-range" type="range" min="0" max="1" step="0.01" value="0" />
+          </label>
+          <label class="range-control" for="section-range">
+            <span>Section</span>
+            <input id="section-range" type="range" min="-1" max="1" step="0.01" value="1" />
+          </label>
+        </section>
+
+        <section class="control-block layer-block" aria-label="Individual layers">
+          <div class="section-heading">
+            <h2>Layers</h2>
+            <div class="mini-actions">
+              <button id="show-all" type="button">All</button>
+              <button id="hide-all" type="button">None</button>
+            </div>
+          </div>
+          <div class="layer-list" id="layer-list"></div>
+        </section>
+      </aside>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
