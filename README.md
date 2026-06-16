@@ -19,7 +19,17 @@ The production output is written to `dist/`.
 
 ## Layer contract
 
-The current model is a primitive in-code placeholder. Each major system is already grouped as a layer:
+The viewer first tries to load `public/models/container.glb`. If that file is missing or cannot be loaded, it falls back to the primitive in-code placeholder.
+
+Each top-level Blender layer should be exported as a real glTF node. The most reliable Blender setup is:
+
+1. Create one Collection per viewer layer.
+2. Add one Empty inside each Collection.
+3. Name the Empty with the layer id below.
+4. Parent that layer's meshes to the Empty.
+5. Export as `.glb` to `public/models/container.glb`.
+
+Recommended layer ids:
 
 - `frame`
 - `walls`
@@ -32,7 +42,15 @@ The current model is a primitive in-code placeholder. Each major system is alrea
 - `plumbing`
 - `lighting`
 
-When replacing the placeholder with production meshes, keep the same layer ids and assign imported `.gltf` nodes to those layer groups. The UI reads the layer list from the model module, so the controls do not need to change when the geometry becomes realistic.
+The UI reads the imported nodes as layers. Unknown layer names are also supported and will appear as custom toggles, but the built-in presets and X-ray shell control know the recommended ids above.
+
+You can preview another file without replacing the default by using a query string:
+
+```txt
+http://127.0.0.1:5173/?model=/models/my-export.glb
+```
+
+Mesh origins do not need to be at world `0,0,0`. Keep the whole container near the scene origin, use useful pivots for movable parts, and apply object scale before export.
 
 ## Texture and lighting notes
 

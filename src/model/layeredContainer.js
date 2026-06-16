@@ -1,5 +1,8 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { createMaterialLibrary } from "./materials.js";
+
+const DEFAULT_MODEL_URL = "/models/container.glb";
 
 const SIZE = {
   length: 12,
@@ -7,6 +10,17 @@ const SIZE = {
   height: 3.6,
   wallThickness: 0.1,
 };
+
+const CUSTOM_LAYER_COLORS = [
+  "#126b66",
+  "#ad5a2a",
+  "#3d6f9f",
+  "#7b6f49",
+  "#7a576d",
+  "#527c4a",
+  "#4f6272",
+  "#9a6b43",
+];
 
 const LAYERS = [
   {
@@ -81,7 +95,273 @@ const LAYERS = [
   },
 ];
 
-export function createLayeredContainer() {
+export async function createLayeredContainer({ modelUrl = DEFAULT_MODEL_URL } = {}) {
+  if (modelUrl && (await isModelAvailable(modelUrl))) {
+    try {
+      return await createImportedContainer(modelUrl);
+    } catch (error) {
+      console.warn(`Unable to load ${modelUrl}; using the procedural placeholder instead.`, error);
+    }
+  }
+
+  return createPlaceholderContainer();
+}
+
+async function isModelAvailable(modelUrl) {
+  try {
+    const response = await fetch(modelUrl, { method: "HEAD", cache: "no-store" });
+    const contentType = response.headers.get("content-type") ?? "";
+    return response.ok && !contentType.includes("text/html");
+  } catch {
+    return false;
+  }
+}
+
+async function createImportedContainer(modelUrl) {
+  const loader = new GLTFLoader();
+  const gltf = await loader.loadAsync(modelUrl);
+  const root = gltf.scene;
+  root.name ||= "ShippingContainer";
+
+  prepareImportedScene(root);
+
+  const layerGroups = sortLayerGroups(findImportedLayerGroups(root));
+  const modelBox = new THREE.Box3().setFromObject(root);
+  const modelCenter = new THREE.Vector3();
+  modelBox.getCenter(modelCenter);
+
+  const usedIds = new Set();
+  const layers = layerGroups.map((group, index) => createImportedLayer(group, index, modelCenter, usedIds));
+
+  return { root, layers, source: "gltf", url: modelUrl };
+}
+
+function prepareImportedScene(root) {
+  root.updateMatrixWorld(true);
+  root.traverse((object) => {
+    if (!object.isMesh) {
+      return;
+    }
+
+    object.castShadow = true;
+    object.receiveShadow = true;
+
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!material) {
+        continue;
+      }
+      material.userData.baseOpacity = material.opacity ?? 1;
+    }
+  });
+}
+
+function findImportedLayerGroups(root) {
+  const explicitLayers = [];
+  root.traverse((object) => {
+    if (object !== root && hasRenderableContent(object) && isExplicitLayerNode(object)) {
+      explicitLayers.push(object);
+    }
+  });
+
+  if (explicitLayers.length > 0) {
+    return removeNestedDuplicates(explicitLayers);
+  }
+
+  const structuralRoot = findStructuralLayerRoot(root);
+  const structuralLayers = structuralRoot.children.filter(hasRenderableContent);
+  if (structuralLayers.length > 1 || structuralRoot !== root) {
+    return structuralLayers;
+  }
+
+  const knownLayers = LAYERS.map((definition) => findLayerNode(root, definition)).filter(Boolean);
+  if (knownLayers.length > 0) {
+    return removeNestedDuplicates(knownLayers);
+  }
+
+  return [root];
+}
+
+function findStructuralLayerRoot(root) {
+  let current = root;
+
+  while (true) {
+    const renderableChildren = current.children.filter(hasRenderableContent);
+    if (renderableChildren.length !== 1 || renderableChildren[0].isMesh) {
+      return current;
+    }
+
+    const next = renderableChildren[0];
+    const nextRenderableChildren = next.children.filter(hasRenderableContent);
+    if (nextRenderableChildren.length <= 1) {
+      return current;
+    }
+
+    current = next;
+  }
+}
+
+function hasRenderableContent(object) {
+  let hasMesh = false;
+  object.traverse((child) => {
+    if (child.isMesh) {
+      hasMesh = true;
+    }
+  });
+  return hasMesh;
+}
+
+function isExplicitLayerNode(object) {
+  return (
+    object.userData.layer === true ||
+    object.userData.layer === "true" ||
+    object.userData.viewerLayer === true ||
+    object.userData.viewerLayer === "true" ||
+    normalizeRawName(object.name).startsWith("layer")
+  );
+}
+
+function findLayerNode(root, definition) {
+  let match = null;
+  root.traverse((object) => {
+    if (!match && object !== root && hasRenderableContent(object) && getLayerDefinition(object.name)?.id === definition.id) {
+      match = object;
+    }
+  });
+  return match;
+}
+
+function sortLayerGroups(groups) {
+  const indexed = groups.map((group, index) => {
+    const definition = getLayerDefinition(group.name);
+    return {
+      group,
+      index,
+      order: definition ? LAYERS.findIndex((layer) => layer.id === definition.id) : Number.POSITIVE_INFINITY,
+    };
+  });
+
+  indexed.sort((a, b) => {
+    if (a.order !== b.order) {
+      return a.order - b.order;
+    }
+    return a.index - b.index;
+  });
+
+  return indexed.map((entry) => entry.group);
+}
+
+function createImportedLayer(group, index, modelCenter, usedIds) {
+  const definition = getLayerDefinition(group.name);
+  const id = ensureUniqueId(definition?.id ?? slugifyLayerId(group.name, index), usedIds);
+  const layerBox = new THREE.Box3().setFromObject(group);
+
+  return {
+    id,
+    name: definition?.name ?? prettifyLayerName(group.name, index),
+    description: definition?.description ?? "Imported Blender collection",
+    color: definition?.color ?? CUSTOM_LAYER_COLORS[index % CUSTOM_LAYER_COLORS.length],
+    explode: definition?.explode?.clone() ?? computeImportedExplode(layerBox, modelCenter, index),
+    group,
+    materials: collectMaterials(group),
+    basePosition: group.position.clone(),
+  };
+}
+
+function computeImportedExplode(layerBox, modelCenter, index) {
+  if (layerBox.isEmpty()) {
+    return new THREE.Vector3(0, 0.45 + index * 0.03, 0);
+  }
+
+  const center = new THREE.Vector3();
+  layerBox.getCenter(center);
+  const direction = center.sub(modelCenter);
+  direction.y *= 0.35;
+
+  if (direction.lengthSq() < 0.0001) {
+    return new THREE.Vector3(0, 0.45 + index * 0.03, 0);
+  }
+
+  return direction.normalize().multiplyScalar(0.85);
+}
+
+function getLayerDefinition(name) {
+  const normalized = normalizeName(name);
+  return LAYERS.find((layer) => normalizeName(layer.id) === normalized || normalizeName(layer.name) === normalized);
+}
+
+function normalizeName(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\.\d+$/u, "")
+    .replace(/^layer[\s_-]*/iu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function normalizeRawName(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\.\d+$/u, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function slugifyLayerId(name, index) {
+  const slug = String(name ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\.\d+$/u, "")
+    .replace(/^layer[\s_-]*/iu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return slug || `layer-${index + 1}`;
+}
+
+function ensureUniqueId(id, usedIds) {
+  let candidate = id;
+  let suffix = 2;
+
+  while (usedIds.has(candidate)) {
+    candidate = `${id}-${suffix}`;
+    suffix += 1;
+  }
+
+  usedIds.add(candidate);
+  return candidate;
+}
+
+function prettifyLayerName(name, index) {
+  const cleaned = String(name ?? "")
+    .replace(/\.\d+$/u, "")
+    .replace(/^layer[\s_-]*/iu, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned || `Layer ${index + 1}`;
+}
+
+function removeNestedDuplicates(groups) {
+  return groups.filter((group) => !groups.some((candidate) => candidate !== group && isAncestor(candidate, group)));
+}
+
+function isAncestor(candidate, object) {
+  let parent = object.parent;
+  while (parent) {
+    if (parent === candidate) {
+      return true;
+    }
+    parent = parent.parent;
+  }
+  return false;
+}
+
+function createPlaceholderContainer() {
   const root = new THREE.Group();
   root.name = "ShippingContainer";
 
